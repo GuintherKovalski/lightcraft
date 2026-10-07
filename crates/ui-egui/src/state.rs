@@ -283,6 +283,17 @@ pub struct UiState {
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
+    /// The Describe field (AI mask from a text prompt) while open: how the selection combines
+    /// (`new` mask, or `add`/`subtract`/`intersect` on the selected one) and the text typed.
+    #[serde(skip)]
+    pub describe: Option<(String, String)>,
+    /// The mask under the pointer in the Masks list (shown on the photo in red).
+    #[serde(skip)]
+    pub hover_mask: Option<u32>,
+    /// When to start the zoomed-in detail pass of an AI mask (app time) and which mask: set by
+    /// each click or description, so the pass runs once the clicking stops.
+    #[serde(skip)]
+    pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
     pub renaming_component: Option<(u32, usize, String)>,
     /// Close the window on the next frame (File → Quit).
@@ -538,7 +549,7 @@ impl Default for UiState {
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
-            mask_overlay: true,
+            mask_overlay: false,
             mask_overlay_mode: "color".into(),
             mask_overlay_color: [230, 30, 40],
             mask_overlay_opacity: 50.0,
@@ -556,6 +567,9 @@ impl Default for UiState {
             search: String::new(),
             focus_search: false,
             renaming_mask: None,
+            describe: None,
+            hover_mask: None,
+            detail_due: None,
             renaming_component: None,
             quit: false,
             dragging_photos: None,

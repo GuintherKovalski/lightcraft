@@ -32,6 +32,7 @@ pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
 pub mod rename;
+pub mod segment;
 pub mod sidecar;
 pub mod smart;
 mod view;
@@ -150,6 +151,8 @@ pub struct Session {
     depth: u32,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
+    /// AI masks (SAM 3): the model and the last photo prepared for it.
+    pub segmenter: segment::Segmenter,
     /// Selected spot (Remove panel), by index into the active photo's spots.
     pub active_spot: Option<usize>,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -237,6 +240,7 @@ impl Session {
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
             active_mask: None,
+            segmenter: segment::Segmenter::default(),
             active_spot: None,
             library: None,
             xmp: sidecar::XmpPrefs::default(),

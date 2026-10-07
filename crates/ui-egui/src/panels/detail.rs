@@ -526,12 +526,22 @@ fn targeted_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respon
     }
 }
 
+/// The colour of a mask hovered in the Masks list.
+const HOVER_RED: [u8; 3] = [230, 30, 40];
+
 /// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
 /// Visualize Spots).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
+    }
+    // a mask hovered in the Masks list shows in red; the selected one only with the overlay on (O)
+    if app.ui.right == RightPanel::Masking
+        && let Some(m) = app.ui.hover_mask.and_then(|id| d.masks.iter().find(|m| m.id == id))
+        && !m.components.is_empty()
+    {
+        return Overlay::Mask { id: m.id.min(u16::MAX as u32) as u16, view: MaskView::default(), color: HOVER_RED, opacity: 55 };
     }
     if app.ui.right == RightPanel::Masking
         && app.ui.mask_overlay
@@ -940,6 +950,41 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 grips.push((m.id, ci, 0, q));
             }
         }
+    }
+    // Object selections (SAM 3) of the selected mask: each click, green to include, red to exclude
+    for m in d.masks.iter().filter(|m| Some(m.id) == active) {
+        for c in &m.components {
+            if let MaskShape::Object { hint, exclude, .. } = &c.shape {
+                for (pts, col) in [(hint, Color32::from_rgb(40, 200, 90)), (exclude, Color32::from_rgb(230, 60, 60))] {
+                    for q in pts {
+                        let q = map.screen(*q);
+                        p.circle_filled(q, 5.0, col);
+                        p.circle_stroke(q, 5.0, Stroke::new(1.5, Color32::WHITE));
+                    }
+                }
+            }
+        }
+    }
+    // Object tool: a click includes what's under it, ⌥-click leaves it out
+    if app.ui.tool == "object" {
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let exclude = ui.input(|i| i.modifiers.alt);
+            match app.run("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
+                Ok(_) => {
+                    if let Some(mid) = app.session.active_mask {
+                        app.ui.detail_due = Some((ui.input(|i| i.time) + 1.0, mid));
+                    }
+                }
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
+        return;
     }
     // brush tool
     if app.ui.tool == "brush" {

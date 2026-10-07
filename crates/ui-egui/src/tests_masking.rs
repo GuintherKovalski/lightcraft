@@ -47,14 +47,20 @@ fn mask_overlay_keys_and_pins() {
     exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.4], "rx": 0.1, "ry": 0.1}));
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.7, 0.2], "end": [0.7, 0.6]}));
     assert_eq!(h.app.session.active_mask, Some(2));
-    // the loupe asks the renderer for the selected mask's overlay
+    // no overlay until a mask is hovered in the Masks list; then that mask, in red
     let d = develop(&h);
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::None);
+    h.app.ui.hover_mask = Some(1);
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::Mask { id: 1, view: MaskView::Color, color: [230, 30, 40], opacity: 55 });
+    h.app.ui.hover_mask = None;
+    // O shows the selected mask all the time (and toggles it off again)
+    h.request("ui.key", json!({"key": "o"}), T);
+    assert!(h.app.ui.mask_overlay);
     let o = crate::panels::detail::view_overlay(&h.app, &d);
     assert_eq!(o, Overlay::Mask { id: 2, view: MaskView::Color, color: [230, 30, 40], opacity: 50 });
-    // O toggles it, Shift+O cycles the colour (and leaves the crop overlay alone)
     h.request("ui.key", json!({"key": "o"}), T);
-    assert!(!h.app.ui.mask_overlay);
     assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::None);
+    // Shift+O cycles the colour (and leaves the crop overlay alone)
     h.request("ui.key", json!({"key": "o"}), T);
     let crop = h.app.ui.crop_overlay;
     let colour = h.app.ui.mask_overlay_color;

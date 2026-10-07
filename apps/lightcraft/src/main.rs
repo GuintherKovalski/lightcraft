@@ -415,10 +415,40 @@ OPTIONS:
 ENVIRONMENT:
   LIGHTCRAFT_GPU_BACKEND=dx12|vulkan|metal|auto|off   graphics backend (default: DX12 on Windows, Metal on macOS,
                    Vulkan on Linux; off = render on the CPU); else WGPU_BACKEND. LIGHTCRAFT_GPU=0: CPU rendering.
+  LIGHTCRAFT_SAM3_DIR=DIR   the SAM 3 model for Object / Describe masks (default: <settings folder>/models/sam3)
 ";
+
+/// Warnings and errors (failed commands, AI mask analysis) on stderr; `LIGHTCRAFT_LOG=info`
+/// (or `debug`) shows more.
+struct StderrLog(log::LevelFilter);
+
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= self.0 && (m.level() <= log::Level::Warn || m.target().starts_with("lightcraft"))
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("lightcraft: {} {}: {}", r.level(), r.target(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn install_log() {
+    let level = match std::env::var("LIGHTCRAFT_LOG").unwrap_or_default().as_str() {
+        "debug" => log::LevelFilter::Debug,
+        "info" => log::LevelFilter::Info,
+        _ => log::LevelFilter::Warn,
+    };
+    static LOGGER: std::sync::OnceLock<StderrLog> = std::sync::OnceLock::new();
+    if log::set_logger(LOGGER.get_or_init(|| StderrLog(level))).is_ok() {
+        log::set_max_level(level);
+    }
+}
 
 fn main() -> eframe::Result {
     lightcraft_engine::guard::install_hook(std::env::temp_dir().join("lightcraft-panics.log"));
+    install_log();
     alloc_release::install();
     let mut control_port: Option<u16> = std::env::var("LIGHTCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
@@ -481,7 +511,10 @@ fn main() -> eframe::Result {
         "LightCraft",
         options,
         Box::new(move |cc| {
-            let (session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+            let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+            // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
+            session.segmenter.dir =
+                std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from).or_else(|| config_dir().map(|d| d.join("models").join("sam3")));
             let mut app = LightcraftApp::new(session, services());
             if let Some(ui) = prefs {
                 app.ui = ui;

@@ -15,6 +15,12 @@ list (author, source, license) is in assets/ATTRIBUTION.md.
 Inter (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 Showcase photographs by Ansel Adams, Dorothea Lange and NASA (docs/images/) — public domain. See assets/ATTRIBUTION.md.
 
+crates/segment ports the SAM 3 model code of Hugging Face Transformers
+(https://github.com/huggingface/transformers, src/transformers/models/sam3 and sam3_tracker),
+Copyright The HuggingFace Team and Meta Platforms, Inc., licensed under the Apache License 2.0.
+The SAM 3 weights are not part of LightCraft: users download the facebook/sam3 checkpoint
+themselves, under Meta's SAM License.
+
 Builds made with craft-fonts (the optional CRAFT_FONTS_DIR build input; all official releases)
 also embed the fonts listed in https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md
 (the Japanese fonts BIZ UDPGothic, BIZ UDMincho and Shippori Mincho; the web build embeds only BIZ

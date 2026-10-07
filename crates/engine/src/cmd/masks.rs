@@ -5,6 +5,7 @@ use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
+use crate::segment::Click;
 use crate::{Result, Session};
 
 fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
@@ -38,8 +39,55 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
-        other => return Err(bad(c, format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange)"))),
+        "object" => MaskShape::Object { hint: points(p, "points"), exclude: points(p, "exclude"), seg: None, detail: vec![], edge: 0.0 },
+        "prompt" => MaskShape::Prompt { text: str_param(p, "text").unwrap_or_default().trim().to_string(), seg: None, detail: vec![], edge: 0.0 },
+        other => {
+            return Err(bad(
+                c,
+                format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt)"),
+            ));
+        }
     })
+}
+
+/// `[[x, y], …]` normalized points under `key`.
+fn points(p: &Value, key: &str) -> Vec<Point> {
+    p.get(key)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect())
+        .unwrap_or_default()
+}
+
+/// Compute the segmentation of a new AI shape (Object with clicks, Prompt): an Object
+/// without clicks stays empty until the photo is clicked; a Prompt that matches nothing is
+/// an error (nothing to select).
+fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<()> {
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    match shape {
+        MaskShape::Object { hint, exclude, seg, .. } if !hint.is_empty() => {
+            *seg = Some(s.segment_clicks(id, &clicks_of(hint, exclude)).map_err(ai_err)?);
+        }
+        MaskShape::Object { .. } => {
+            // the clicks come later: start analyzing the photo now, and refuse an Object mask that
+            // could never be computed (no model, missing file) rather than leave an empty one
+            s.segment_prepare(id).map_err(ai_err)?;
+        }
+        MaskShape::Prompt { text, seg, .. } => {
+            let found = s.segment_text(id, text).map_err(ai_err)?;
+            *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// AI mask failures are shown as they are (not as "invalid parameters").
+fn ai_err(msg: impl Into<String>) -> crate::EngineError {
+    crate::EngineError::Other(msg.into())
+}
+
+fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
+    include.iter().map(|p| Click { at: *p, include: true }).chain(exclude.iter().map(|p| Click { at: *p, include: false })).collect()
 }
 
 fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
@@ -67,11 +115,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…), name?}",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text), name?}",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let shape = shape_from(&kind, p, "mask.add")?;
+                let mut shape = shape_from(&kind, p, "mask.add")?;
+                resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 masks_edit(s, "mask.add", "Add Mask", |masks, active| {
@@ -95,7 +144,8 @@ pub fn specs() -> Vec<CommandSpec> {
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("brush").to_string();
-                let shape = shape_from(&kind, p, "mask.addComponent")?;
+                let mut shape = shape_from(&kind, p, "mask.addComponent")?;
+                resolve_ai(s, &mut shape, "mask.addComponent")?;
                 let op: MaskOp =
                     serde_json::from_value(p.get("op").cloned().unwrap_or(json!("add"))).map_err(|e| bad("mask.addComponent", e.to_string()))?;
                 let active = s.active_mask;
@@ -211,6 +261,89 @@ pub fn specs() -> Vec<CommandSpec> {
                     Ok(())
                 })?;
                 Ok(json!({"samples": out}))
+            }
+        ),
+        cmd!(
+            "mask.objectPoint",
+            "Add Object Click",
+            [],
+            None,
+            "{x, y: normalized image point, exclude?: bool (⌥-click: leave this part out), id?: maskId} — a click on the selected mask's Object selection (its last Object component); SAM 3 re-segments the object → {include, exclude}",
+            has_active,
+            |s, p| {
+                let c = "mask.objectPoint";
+                let at = Point::new(super::f64_req(p, "x", c)?, super::f64_req(p, "y", c)?);
+                if !(0.0..=1.0).contains(&at.x) || !(0.0..=1.0).contains(&at.y) {
+                    return Err(bad(c, "the point is outside the photo"));
+                }
+                let exclude = bool_or(p, "exclude", false);
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mid = mask_id(p, s.active_mask, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let m = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
+                let k = m
+                    .components
+                    .iter()
+                    .rposition(|x| matches!(x.shape, MaskShape::Object { .. }))
+                    .ok_or_else(|| bad(c, "the mask has no Object selection (add one first)"))?;
+                let Some(MaskShape::Object { hint, exclude: ex, edge, .. }) = m.components.get(k).map(|x| &x.shape) else {
+                    return Err(bad(c, "not an Object component"));
+                };
+                let (mut hint, mut ex, edge) = (hint.clone(), ex.clone(), *edge);
+                if exclude {
+                    ex.push(at)
+                } else {
+                    hint.push(at)
+                }
+                let seg = if hint.is_empty() { None } else { Some(s.segment_clicks(id, &clicks_of(&hint, &ex)).map_err(ai_err)?) };
+                let out = json!({"include": hint.len(), "exclude": ex.len()});
+                masks_edit(s, c, "Object Mask", |masks, _| {
+                    let i = find(masks, mid, c)?;
+                    if let Some(comp) = masks[i].components.get_mut(k) {
+                        comp.shape = MaskShape::Object { hint, exclude: ex, seg, detail: vec![], edge };
+                    }
+                    Ok(())
+                })?;
+                Ok(out)
+            }
+        ),
+        cmd!(
+            "mask.refineDetail",
+            "Refine AI Mask Detail",
+            [],
+            None,
+            "{id?: maskId, component?} — a zoomed-in SAM 3 pass over an Object/Describe selection (default: the mask's last one): the photo around it is analyzed again at a higher resolution, in the background; the mask updates when it's done → {started}",
+            has_active,
+            |s, p| {
+                let c = "mask.refineDetail";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mid = mask_id(p, s.active_mask, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let m = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
+                let k = match p.get("component").and_then(Value::as_u64) {
+                    Some(k) => k as usize,
+                    None => m
+                        .components
+                        .iter()
+                        .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. }))
+                        .ok_or_else(|| bad(c, "the mask has no Object or Describe selection"))?,
+                };
+                let started = s.segment_detail(id, mid, k).map_err(ai_err)?;
+                Ok(json!({"started": started}))
+            }
+        ),
+        cmd!(
+            query "segment.prepare",
+            "Prepare AI Masks",
+            [],
+            None,
+            "{} — load SAM 3 and analyze the active photo in the background, so Object clicks are instant → {busy}",
+            has_active,
+            |s, _| {
+                let c = "segment.prepare";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                s.segment_prepare(id).map_err(ai_err)?;
+                Ok(json!({"busy": s.segmenter.busy()}))
             }
         ),
         cmd!(

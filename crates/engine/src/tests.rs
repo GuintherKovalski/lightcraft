@@ -727,3 +727,37 @@ fn curve_reset_by_channel_and_whole() {
     assert_eq!(active_dev(&s).curve, lightcraft_develop::ToneCurve::default());
     assert!(s.execute("curve.reset", &json!({"channel": "alpha"})).is_err());
 }
+
+#[test]
+fn ai_masks_without_the_model_explain_themselves() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // an Object mask that could never be computed is refused, not left empty
+    let e = s.execute("mask.add", &json!({"kind": "object"})).unwrap_err().to_string();
+    assert!(e.contains("SAM 3") || e.contains("not available"), "{e}");
+    assert!(!e.contains("invalid parameters"), "shown as is: {e}");
+    assert!(s.develop_of(id).unwrap().masks.is_empty());
+    // an empty Object component (as an older document may hold) still takes clicks
+    let shape = lightcraft_develop::MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.masks.push(lightcraft_develop::Mask {
+        id: 1,
+        components: vec![lightcraft_develop::MaskComponent { name: None, op: lightcraft_develop::MaskOp::Add, invert: false, shape }],
+        ..Default::default()
+    });
+    s.set_develop(id, d, "test").unwrap();
+    s.active_mask = Some(1);
+    // clicks and descriptions need the model: an error that says what's missing, nothing changed
+    let e = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap_err().to_string();
+    assert!(e.contains("SAM 3") || e.contains("not available"), "{e}");
+    let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
+    assert!(e.contains("SAM 3") || e.contains("not available"), "{e}");
+    let empty = std::env::temp_dir().join(format!("lc-no-sam3-{}", std::process::id()));
+    s.segmenter.dir = Some(empty.clone());
+    let e = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap_err().to_string();
+    assert!(e.contains(&empty.display().to_string()) || e.contains("not available"), "names the folder: {e}");
+    assert_eq!(s.develop_of(id).unwrap().masks.len(), 1);
+    // bad input is an error, not a crash
+    assert!(s.execute("mask.objectPoint", &json!({"x": 1.5, "y": 0.5})).is_err());
+    assert!(s.execute("mask.add", &json!({"kind": "prompt", "text": "  "})).is_err());
+}

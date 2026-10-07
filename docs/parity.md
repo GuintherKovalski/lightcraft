@@ -69,8 +69,9 @@ Take the first one nobody is working on.
    then tune tone, highlights, texture/clarity/dehaze, NR and sharpening against it.
 5. **LR-EDIT-OPTICS-PROFILE** (P1): a lens-profile database of our own (embedded DNG/maker corrections work today).
 6. **AI masks and Enhance** (LR-MASK-SUBJECT / SKY / PEOPLE / OBJECTS, LR-EDIT-DETAIL-DENOISE, SUPERRES, LENSBLUR):
-   blocked on a model strategy (permissively licensed weights or our own training, pure-Rust inference). A maintainer
-   decision, not just engineering.
+   Object and Describe masks run SAM 3 in pure Rust (`crates/segment`) with user-installed weights; Subject / Sky /
+   People could use the same model with fixed prompts. Bundling or recommending weights (SAM License) and denoise /
+   super-resolution models remain a maintainer decision.
 7. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
    Print, publish): large, well understood, lower priority than 1–5.
 
@@ -328,7 +329,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-MASK-SUBJECT | Select subject | P2 | 🟡 | `cmd:mask.add` (`subject`), `crates/pipeline/src/masks.rs` | saliency heuristic, no segmentation model |
 | LR-MASK-SKY | Select sky | P2 | 🟡 | `cmd:mask.add` (`sky`) | heuristic |
 | LR-MASK-BACKGROUND | Select background | P2 | 🟡 | `cmd:mask.add` (`background`) | inverse of the subject heuristic |
-| LR-MASK-OBJECTS | Object selection | P2 | ⬜ | | shape exists (falls back to the subject heuristic); no UI |
+| LR-MASK-OBJECTS | Object selection | P2 | 🟡 | `cmd:mask.add` (`object`, `prompt`), `cmd:mask.objectPoint`, `cmd:segment.prepare`, `crates/segment`, `crates/engine/src/segment.rs` | SAM 3 in pure Rust (candle; Metal on macOS, CPU elsewhere): Object tile → click to include, ⌥-click to leave out; Describe tile → a text prompt selects every instance ("sky", "the red car"); both also as Add/Subtract/Intersect components. The segmentation is stored with the mask (288² logits), so renders and exports never need the model. Weights are not bundled: the user installs the `facebook/sam3` checkpoint (SAM License) — see docs/ai-masks.md. + / − under the selected mask combine selections; comma lists (`car, road`); a zoomed-in detail pass (`cmd:mask.refineDetail`, background) for 5–10× finer edges on small objects; per-selection Edge (hard ↔ soft); hovering a mask shows it in red. No brush/box object mode; the first click on a photo waits for its analysis (~4 s on an M4 Pro) |
 | LR-MASK-PEOPLE | People parts | P2 | ⬜ | | |
 | LR-MASK-LANDSCAPE | Landscape classes | P2 | ⬜ | | shape exists, evaluates empty |
 | LR-MASK-BRUSH | Brush mask | P0 | ✅ | `cmd:tool.brush`, `cmd:mask.brushStroke` (`autoMask`), `crates/pipeline/src/masks.rs` | size/feather/flow/density/erase; Auto Mask: dabs weighted by similarity to the colour under the dab centre, refined by a guided filter on luminance (CPU + GPU); no A/B brushes, no pressure |

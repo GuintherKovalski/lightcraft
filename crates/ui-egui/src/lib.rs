@@ -260,6 +260,7 @@ impl LightcraftApp {
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
         if let Err(e) = &r {
+            log::warn!("{id}: {e}");
             self.ui.status = e.clone();
         }
         r
@@ -346,6 +347,34 @@ impl LightcraftApp {
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         let t = ctx.input(|i| i.time);
         self.ui.toast = Some((text.into(), t + 1.4));
+    }
+
+    /// AI masks: start a zoomed-in detail pass once the clicking stops (`ui.detail_due`), and
+    /// apply finished passes.
+    fn ai_mask_detail(&mut self, ctx: &egui::Context) {
+        if self.session.segment_poll() {
+            ctx.request_repaint();
+        }
+        let now = ctx.input(|i| i.time);
+        if let Some((due, mask)) = self.ui.detail_due {
+            if now >= due && !self.session.segmenter.busy() && !self.session.segmenter.detail_busy() {
+                self.ui.detail_due = None;
+                if let Err(e) = self.run("mask.refineDetail", serde_json::json!({"id": mask})) {
+                    log::warn!("detail pass: {e}");
+                }
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            }
+        }
+        if self.session.segmenter.detail_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
+    /// A toast for an error the user has to read and act on (stays 6 s).
+    pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        let t = ctx.input(|i| i.time);
+        self.ui.toast = Some((text.into(), t + 6.0));
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
@@ -673,6 +702,7 @@ impl LightcraftApp {
         }
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        self.ai_mask_detail(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ui, |ui| panels::detail::show(self, ui));
